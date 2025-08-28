@@ -7,26 +7,35 @@ import * as fromSubscribers from './JsonSchemaSubscribers';
 class JsonSchemaParser {
     constructor() {
         /**
-         * @type {SyncSeriesEventEmitter<{target: JsonSchemaParser, schema: import('json-schema').JSONSchema7, property: import('json-schema').JSONSchema7Definition, model: import('@themost/common').DataModelProperties, field: import('@themost/common').DataFieldBase}>}
+         * @type {SyncSeriesEventEmitter<import('./JsonSchemaSubscribers').JsonSchemaParserPropertyEvent>}
          */
-        this.beforeProperty = new SyncSeriesEventEmitter();
-        this.beforeProperty.subscribe(fromSubscribers.onPropertyTypeRef);
-        this.beforeProperty.subscribe(fromSubscribers.onPropertyTypeArray);
+        this.resolvingProperty = new SyncSeriesEventEmitter();
+        this.resolvingProperty.subscribe(fromSubscribers.onPropertyTypeRef);
+        this.resolvingProperty.subscribe(fromSubscribers.onPropertyTypeArray);
+        this.resolvingProperty.subscribe(fromSubscribers.onPropertyDynamicRef);
+        /**
+         * @type {SyncSeriesEventEmitter<import('./JsonSchemaSubscribers').JsonSchemaParserResolveEvent>}
+         */
+        this.resolvingSchema = new SyncSeriesEventEmitter();
     }
 
     /**
      * Parses a JSON schema into a data model schema.
      * @param {import('json-schema').JSONSchema7} schema
      * @param {import('@themost/common').DataModelProperties=} template
-     * @returns {import('@themost/common').DataModelProperties}
+     * @returns {Map<string, import('@themost/common').DataModelProperties>}
      */
     parse(schema, template) {
 
-        const propertiesTemplate = cloneDeep(template || {});
+        /**
+         * @type {Map<string, import('@themost/common').DataModelProperties>}
+         */
+        const additionalModels = new Map();
+        const modelTemplate = cloneDeep(template || {});
         /**
          * @type {import('@themost/common').DataModelProperties}
          */
-        const properties = assign({
+        const model = assign({
             '$schema': 'https://themost-framework.github.io/themost/models/2018/2/schema.json',
             '@id': schema.$id,
             'caching': 'conditional',
@@ -49,12 +58,11 @@ class JsonSchemaParser {
                     'account': 'Administrators'
                 }
             ]
-        }, propertiesTemplate);
+        }, modelTemplate);
         const keys = Object.keys(schema.properties);
         for (const key of keys) {
             const property = schema.properties[key];
-            let { type } = property;
-            const propertyType = JsonSchemaDataTypes.get(type);
+            const propertyType = this.getType(property);
             /**
              * @type {import('@themost/common').DataField}
              */
@@ -67,22 +75,46 @@ class JsonSchemaParser {
                 'nullable': schema?.required?.includes(key) !== true,
                 'many': property.type === 'array'
             };
-            this.beforeProperty.emit({
+            /**
+             * @type {import('./JsonSchemaSubscribers').JsonSchemaParserPropertyEvent}
+             */
+            const propertyEvent = {
                 target: this,
                 schema,
                 property,
-                model: properties,
+                model: model,
+                additionalSchema: [],
                 field
-            });
+            };
+            this.resolvingProperty.emit(propertyEvent);
+            for (const item of propertyEvent.additionalSchema) {
+                if (item.$name !== model.name) {
+                    // check if the schema already exists
+                    const exists = additionalModels.get(item.$name);
+                    // if not exists then parse it
+                    if (exists == null) {
+                        const intermediateModelTemplate = {
+                            name: item.$name,
+                            title: item.title || item.$name,
+                            description: item.description
+                        };
+                        // get results
+                        const intermediateModels = this.parse(item, intermediateModelTemplate);
+                        // merge results
+                        intermediateModels.forEach(model => additionalModels.set(model.name, model));
+                    }
+                }
+            }
             // remove null or undefined attributes
             Object.keys(field).forEach(key => {
                 if (field[key] == null) {
                     delete field[key];
                 }
             });
-            properties.fields.push(field);
+            model.fields.push(field);
         }
-        return properties;
+        // return the current model and additional results added by the processing
+        return new Map([[model.name, model], ...additionalModels]);
     }
 
     /**
@@ -113,7 +145,6 @@ class JsonSchemaParser {
      * @returns {string | undefined}
      */
     getType(definition) {
-        const format = definition.format;
         if (definition.format) {
             const res = JsonSchemaDataTypes.get(definition.format);
             if (res) {
@@ -121,6 +152,25 @@ class JsonSchemaParser {
             }
         }
         return JsonSchemaDataTypes.get(definition.type);
+    }
+
+    /**
+     * 
+     * @param {string} id 
+     * @returns {import('./JsonSchemaParserBase').JSONSchema7WithName | undefined}
+     */
+    getSchema(id) {
+        /**
+         * @type {import('./JsonSchemaSubscribers').JsonSchemaParserResolveEvent}
+         */
+        const event = {
+            target: this,
+            schema: [],
+            id
+        };
+        // resolve schema
+        this.resolvingSchema.emit(event);
+        return event.schema.find(schema => schema.$id === id);
     }
 
 }
