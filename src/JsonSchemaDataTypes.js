@@ -6,6 +6,9 @@ export const JsonSchemaDataTypes = new Map([
         'integer', 'Integer'
     ],
     [
+        'float', 'Number'
+    ],
+    [
         'number', 'Number'
     ],
     [
