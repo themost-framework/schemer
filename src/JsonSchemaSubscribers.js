@@ -49,8 +49,10 @@ function onPropertyTypeRef(event) {
         field.type = target.getType(definition);
         return;
       }
-      // get field additional type
-      field.additionalType = definition.$name;
+      if (Object.keys(definition.properties).length > 0) {
+        // get field additional type
+        field.additionalType = definition.$name;
+      }
       // set field type to Json
       field.type = 'Json';
     }
